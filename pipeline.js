@@ -1657,7 +1657,12 @@ function buildJointBilateralFilterStage(
     gl.deleteShader(fragmentShader);
   }
 
-  return { render, updateSigmaSpace, updateSigmaColor, cleanUp };
+  return {
+    render,
+    cleanUp,
+    updateSigmaSpace, // 이 줄이 있어야 외부에서 호출 가능
+    updateSigmaColor,
+  };
 }
 
 function buildMaskPostProcessStage(
@@ -2485,6 +2490,14 @@ function buildWebGL2Pipeline(
     }
   }
 
+  function updateBilateralParams(sigmaSpace, sigmaColor) {
+    if (jointBilateralFilterStage) {
+      // buildJointBilateralFilterStage가 리턴한 내부 함수를 직접 호출
+      jointBilateralFilterStage.updateSigmaSpace(sigmaSpace);
+      jointBilateralFilterStage.updateSigmaColor(sigmaColor);
+    }
+  }
+
   function updateTransform(transform) {
     if (backgroundStage.updateTransform) {
       backgroundStage.updateTransform(transform);
@@ -2512,6 +2525,7 @@ function buildWebGL2Pipeline(
     updateOutputAdjustments,
     updateTransform,
     updateAlphaParams,
+    updateBilateralParams,
     cleanUp,
   };
 }

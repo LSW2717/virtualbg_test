@@ -1,0 +1,5 @@
+node_modules
+*.tflite
+*.json
+!package.json
+!*.config.cjs

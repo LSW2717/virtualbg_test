@@ -117,12 +117,77 @@
           style="width: 100%"
         />
       </div>
+      <div style="border-top: 1px solid #444; margin: 10px 0; padding-top: 10px">
+        <h4 style="margin: 0 0 10px 0; font-size: 13px; color: #ff99cc">Bilateral Filter</h4>
+        <label style="font-size: 12px">Sigma Space: <span id="v-space">2.0</span></label>
+        <input
+          type="range"
+          id="s-space"
+          min="0"
+          max="10"
+          step="0.1"
+          value="2.0"
+          style="width: 100%"
+        />
+        <label style="font-size: 12px">Sigma Color: <span id="v-color">0.10</span></label>
+        <input
+          type="range"
+          id="s-color"
+          min="0"
+          max="1"
+          step="0.01"
+          value="0.10"
+          style="width: 100%"
+        />
+      </div>
+      <div style="border-top: 1px solid #444; margin: 10px 0; padding-top: 10px">
+        <h4 style="margin: 0 0 10px 0; font-size: 13px; color: #00ffcc">Background & Effects</h4>
+
+        <div
+          style="
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+          "
+        >
+          <label style="font-size: 12px">Use Background</label>
+          <input type="checkbox" id="c-use-bg" checked />
+        </div>
+
+        <label style="font-size: 12px">BG Blur: <span id="v-blur">0</span></label>
+        <input type="range" id="s-blur" min="0" max="25" step="1" value="0" style="width: 100%" />
+
+        <label style="font-size: 12px">Brightness: <span id="v-bright">100</span>%</label>
+        <input
+          type="range"
+          id="s-bright"
+          min="0"
+          max="200"
+          step="1"
+          value="100"
+          style="width: 100%"
+        />
+
+        <div
+          style="
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 8px;
+          "
+        >
+          <label style="font-size: 12px">Grayscale (B&W)</label>
+          <input type="checkbox" id="c-gray" />
+        </div>
+      </div>
     </div>
     <script src="pipeline.js"></script>
-
     <script>
       const videoElement = document.getElementById('outVideo');
       const logElement = document.getElementById('log');
+
+      let _cachedBg = null;
 
       async function getBase64FromImage(url) {
         try {
@@ -150,66 +215,97 @@
           const processedStream = window.createCustomVideoStream(stream);
           videoElement.srcObject = processedStream;
 
-          const bgBase64 = await getBase64FromImage('background.jpg');
-          if (bgBase64) {
-            window.configCustomVideoStream({
-              background: bgBase64,
-              blur: 0,
-              mirror: false,
-              degree: 360,
-              brightness: 100,
-              grayscale: 0,
-            });
-            logElement.innerText = '합성 가동 중 (256x256)';
-          }
+          // 이미지 미리 한 번 로드
+          _cachedBg = await getBase64FromImage('background.jpg');
 
-          // 파이프라인이 완전히 빌드될 때까지 잠시 대기 후 슬라이더 연결
+          // 초기 가동 (배경 있음)
+          applyBackgroundConfig();
+
+          logElement.innerText = '합성 가동 중 (256x256)';
           setTimeout(initSliders, 2000);
         } catch (err) {
           logElement.innerText = '에러: ' + err.message;
         }
       }
 
+      // 네가 말한 "배경 관련 값만 보고 config 호출하는 메서드"
+      function applyBackgroundConfig() {
+        const useBg = document.getElementById('c-use-bg').checked;
+        const blurSlider = document.getElementById('s-blur');
+        const brightSlider = document.getElementById('s-bright');
+        const grayCheck = document.getElementById('c-gray');
+
+        // 블러 범위가 100까지니까 슬라이더의 max값도 맞춰줘야 함
+        blurSlider.max = 100;
+
+        const blurVal = parseFloat(blurSlider.value);
+        const brightVal = parseFloat(brightSlider.value);
+        const isGray = grayCheck.checked;
+
+        // 핵심: 배경 체크 없으면 null 대신 빈 문자열("") 전달
+        window.configCustomVideoStream({
+          background: useBg ? _cachedBg : '',
+          blur: blurVal,
+          mirror: false,
+          degree: 360,
+          brightness: brightVal,
+          grayscale: isGray ? 100 : 0,
+        });
+      }
       function initSliders() {
-        const ids = ['low', 'high', 'diff', 'min', 'max'];
-        const els = {};
-        ids.forEach((id) => {
-          els[id] = {
+        // 기존 마스크 관련 슬라이더
+        const maskIds = ['low', 'high', 'diff', 'min', 'max', 'space', 'color'];
+        const maskEls = {};
+        maskIds.forEach((id) => {
+          maskEls[id] = {
             slider: document.getElementById('s-' + id),
             text: document.getElementById('v-' + id),
           };
         });
 
-        function update() {
+        // 배경 관련 엘리먼트
+        const bgControls = ['s-blur', 's-bright', 'c-use-bg', 'c-gray'];
+
+        // 1. 기존 마스크 업데이트 로직 (엔진 내부 파라미터만 수정)
+        function updateMaskParams() {
           const val = {};
-          ids.forEach((id) => {
-            val[id] = parseFloat(els[id].slider.value);
-            els[id].text.innerText = val[id].toFixed(2);
+          maskIds.forEach((id) => {
+            val[id] = parseFloat(maskEls[id].slider.value);
+            maskEls[id].text.innerText = val[id].toFixed(2);
           });
 
           if (window._webgl2Pipeline) {
-            // 1. Coverage 데이터 전송 확인
-            console.log('--- 슬라이더 데이터 전송 시도 ---');
-            console.log('Coverage:', val.low, val.high);
-
             _postProcessingConfig.coverage = [val.low, val.high];
             _webgl2Pipeline.updatePostProcessingConfig(_postProcessingConfig);
 
-            // 2. Alpha 데이터 전송 확인 (여기가 핵심!)
             if (_webgl2Pipeline.updateAlphaParams) {
-              console.log('Alpha Params 보냄 -> Diff:', val.diff, 'Min:', val.min, 'Max:', val.max);
               _webgl2Pipeline.updateAlphaParams(val.diff, val.min, val.max);
-            } else {
-              // 만약 이 메시지가 뜨면 pipeline.js 파일에 함수 연결을 안 한 거임
-              console.error('에러: pipeline.js에 updateAlphaParams 함수가 정의되지 않았습니다!');
             }
-          } else {
-            console.warn('경고: _webgl2Pipeline이 아직 생성되지 않았습니다.');
+            if (_webgl2Pipeline.updateBilateralParams) {
+              _webgl2Pipeline.updateBilateralParams(val.space, val.color);
+            }
           }
         }
 
-        ids.forEach((id) => els[id].slider.addEventListener('input', update));
-        update(); // 초기값 적용
+        // 마스크 슬라이더 이벤트 연결
+        maskIds.forEach((id) => maskEls[id].slider.addEventListener('input', updateMaskParams));
+
+        // 2. 배경 설정 이벤트 연결 (네가 만든 메서드 호출)
+        bgControls.forEach((id) => {
+          const el = document.getElementById(id);
+          const eventType = el.type === 'checkbox' ? 'change' : 'input';
+
+          el.addEventListener(eventType, () => {
+            // 수치 표시 업데이트 (텍스트 레이블 있는 경우만)
+            const vSpan = document.getElementById('v-' + id.split('-')[1]);
+            if (vSpan) vSpan.innerText = el.value;
+
+            // 바로 배경 메서드 실행
+            applyBackgroundConfig();
+          });
+        });
+
+        updateMaskParams(); // 초기 마스크 세팅
       }
 
       start();
