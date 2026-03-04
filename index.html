@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Google Meet Background Synthesis</title>
+    <style>
+      body {
+        background: #111;
+        color: #0f0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        font-family: monospace;
+        padding-top: 50px;
+      }
+      /* 좌우 반전은 여기서 처리 (거울 모드) */
+      video {
+        width: 640px;
+        height: 480px;
+        transform: scaleX(-1);
+        border: 2px solid #0f0;
+        background: #000;
+      }
+      #log {
+        margin-top: 10px;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>TFLite 256x256 + Background.jpg Pipeline</h2>
+
+    <video id="outVideo" autoplay playsinline></video>
+    <div id="log">카메라 및 파이프라인 초기화 중...</div>
+
+    <div
+      id="seg-controller"
+      style="
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        z-index: 10000;
+        background: rgba(0, 0, 0, 0.85);
+        color: white;
+        padding: 20px;
+        border-radius: 12px;
+        font-family: 'Malgun Gothic', sans-serif;
+        width: 260px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+        line-height: 1.6;
+      "
+    >
+      <h4
+        style="
+          margin: 0 0 15px 0;
+          border-bottom: 1px solid #555;
+          padding-bottom: 5px;
+          color: #00ffcc;
+        "
+      >
+        Mask Controller
+      </h4>
+
+      <div style="margin-bottom: 15px">
+        <label style="font-size: 12px">Coverage Low: <span id="v-low">0.15</span></label>
+        <input
+          type="range"
+          id="s-low"
+          min="0"
+          max="1"
+          step="0.01"
+          value="0.15"
+          style="width: 100%"
+        />
+        <label style="font-size: 12px">Coverage High: <span id="v-high">0.90</span></label>
+        <input
+          type="range"
+          id="s-high"
+          min="0"
+          max="1"
+          step="0.01"
+          value="0.90"
+          style="width: 100%"
+        />
+      </div>
+
+      <div style="border-top: 1px solid #444; margin: 10px 0; padding-top: 10px">
+        <h4 style="margin: 0 0 10px 0; font-size: 13px; color: #ffcc00">Smoothing (Softmax)</h4>
+        <label style="font-size: 12px">Diff (기준): <span id="v-diff">0.40</span></label>
+        <input
+          type="range"
+          id="s-diff"
+          min="0"
+          max="1"
+          step="0.01"
+          value="0.40"
+          style="width: 100%"
+        />
+        <label style="font-size: 12px">Min Alpha (정지): <span id="v-min">0.10</span></label>
+        <input
+          type="range"
+          id="s-min"
+          min="0"
+          max="1"
+          step="0.01"
+          value="0.10"
+          style="width: 100%"
+        />
+        <label style="font-size: 12px">Max Alpha (이동): <span id="v-max">0.90</span></label>
+        <input
+          type="range"
+          id="s-max"
+          min="0"
+          max="1"
+          step="0.01"
+          value="0.90"
+          style="width: 100%"
+        />
+      </div>
+    </div>
+    <script src="pipeline.js"></script>
+
+    <script>
+      const videoElement = document.getElementById('outVideo');
+      const logElement = document.getElementById('log');
+
+      async function getBase64FromImage(url) {
+        try {
+          const response = await fetch(url);
+          const blob = await response.blob();
+          return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const base64data = reader.result.split(',')[1];
+              resolve(base64data);
+            };
+            reader.readAsDataURL(blob);
+          });
+        } catch (e) {
+          console.error('배경 이미지 로드 실패:', e);
+          return null;
+        }
+      }
+
+      async function start() {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: 640, height: 480 },
+          });
+          const processedStream = window.createCustomVideoStream(stream);
+          videoElement.srcObject = processedStream;
+
+          const bgBase64 = await getBase64FromImage('background.jpg');
+          if (bgBase64) {
+            window.configCustomVideoStream({
+              background: bgBase64,
+              blur: 0,
+              mirror: false,
+              degree: 360,
+              brightness: 100,
+              grayscale: 0,
+            });
+            logElement.innerText = '합성 가동 중 (256x256)';
+          }
+
+          // 파이프라인이 완전히 빌드될 때까지 잠시 대기 후 슬라이더 연결
+          setTimeout(initSliders, 2000);
+        } catch (err) {
+          logElement.innerText = '에러: ' + err.message;
+        }
+      }
+
+      function initSliders() {
+        const ids = ['low', 'high', 'diff', 'min', 'max'];
+        const els = {};
+        ids.forEach((id) => {
+          els[id] = {
+            slider: document.getElementById('s-' + id),
+            text: document.getElementById('v-' + id),
+          };
+        });
+
+        function update() {
+          const val = {};
+          ids.forEach((id) => {
+            val[id] = parseFloat(els[id].slider.value);
+            els[id].text.innerText = val[id].toFixed(2);
+          });
+
+          if (window._webgl2Pipeline) {
+            // 1. Coverage 데이터 전송 확인
+            console.log('--- 슬라이더 데이터 전송 시도 ---');
+            console.log('Coverage:', val.low, val.high);
+
+            _postProcessingConfig.coverage = [val.low, val.high];
+            _webgl2Pipeline.updatePostProcessingConfig(_postProcessingConfig);
+
+            // 2. Alpha 데이터 전송 확인 (여기가 핵심!)
+            if (_webgl2Pipeline.updateAlphaParams) {
+              console.log('Alpha Params 보냄 -> Diff:', val.diff, 'Min:', val.min, 'Max:', val.max);
+              _webgl2Pipeline.updateAlphaParams(val.diff, val.min, val.max);
+            } else {
+              // 만약 이 메시지가 뜨면 pipeline.js 파일에 함수 연결을 안 한 거임
+              console.error('에러: pipeline.js에 updateAlphaParams 함수가 정의되지 않았습니다!');
+            }
+          } else {
+            console.warn('경고: _webgl2Pipeline이 아직 생성되지 않았습니다.');
+          }
+        }
+
+        ids.forEach((id) => els[id].slider.addEventListener('input', update));
+        update(); // 초기값 적용
+      }
+
+      start();
+    </script>
+  </body>
+</html>
